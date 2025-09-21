@@ -8,6 +8,8 @@
 # License: MIT
 #==============================================================================
 
+set -euo pipefail
+
 detect_terminal_capabilities() {
     local capabilities=""
     
@@ -44,11 +46,16 @@ detect_terminal_capabilities() {
         MINGW*|MSYS*|CYGWIN*) capabilities+="windows_bash " ;;
     esac
     
-    if [[ $TERM_PROGRAM == "Apple_Terminal" ]]; then
-        capabilities+="apple_terminal "
-    elif [[ $TERM_PROGRAM == "iTerm.app" ]]; then
-        capabilities+="iterm2 "
-    elif [[ $TERM == "screen"* ]] && [[ -n $TMUX ]]; then
+    # Fix: Check if TERM_PROGRAM is set before using it
+    if [[ -n "${TERM_PROGRAM:-}" ]]; then
+        if [[ $TERM_PROGRAM == "Apple_Terminal" ]]; then
+            capabilities+="apple_terminal "
+        elif [[ $TERM_PROGRAM == "iTerm.app" ]]; then
+            capabilities+="iterm2 "
+        fi
+    fi
+    
+    if [[ $TERM == "screen"* ]] && [[ -n "${TMUX:-}" ]]; then
         capabilities+="tmux "
     fi
     
@@ -171,10 +178,11 @@ function advanced_menu_selector() {
         return 1
     fi
 
-    local cur=0 esc=$(echo -en "\e")
-    tput civis 2>/dev/null
-    trap 'tput cnorm 2>/dev/null; stty echo 2>/dev/null' EXIT INT TERM
-    stty -echo 2>/dev/null
+    # Fix: Avoid potential pipeline issues with echo
+    local cur=0 esc=$'\033'
+    tput civis 2>/dev/null || true
+    trap 'tput cnorm 2>/dev/null || true; stty echo 2>/dev/null || true' EXIT INT TERM
+    stty -echo 2>/dev/null || true
 
     printf "%s\n" "$prompt"
 
@@ -189,17 +197,29 @@ function advanced_menu_selector() {
             (( ++index ))
         done
 
-        read -s -n1 key
+        read -s -n1 key || true
         if [[ $key == $esc ]]; then
             read -s -n2 -t 0.1 key 2>/dev/null || key=""
             case "$key" in
-                "[A") (( cur = (cur - 1 + count) % count )) ;;
-                "[B") (( cur = (cur + 1) % count )) ;;
+                "[A") 
+                    (( cur-- )) || true
+                    if (( cur < 0 )); then
+                        cur=$((count - 1))
+                    fi
+                    ;;
+                "[B") 
+                    (( cur++ )) || true
+                    if (( cur >= count )); then
+                        cur=0
+                    fi
+                    ;;
             esac
         elif [[ $key == "" || $key == $'\n' || $key == $'\r' ]]; then
             break
         elif [[ $key == $'\003' || $key == "q" || $key == "Q" ]]; then
-            tput cnorm 2>/dev/null; stty echo 2>/dev/null; trap - EXIT INT TERM
+            tput cnorm 2>/dev/null || true
+            stty echo 2>/dev/null || true
+            trap - EXIT INT TERM
             echo -en "\e[${count}A"
             echo -e "\nSelection cancelled" >&2
             return 130
@@ -208,8 +228,8 @@ function advanced_menu_selector() {
         echo -en "\e[${count}A"
     done
 
-    tput cnorm 2>/dev/null
-    stty echo 2>/dev/null
+    tput cnorm 2>/dev/null || true
+    stty echo 2>/dev/null || true
     trap - EXIT INT TERM
 
     echo -en "\e[${count}A"
@@ -438,7 +458,7 @@ menu_selector() {
     setup_colors "$capabilities"
 
     if [[ $capabilities == *"wsl"* ]]; then
-        if [[ -n "$FORCE_SIMPLE_MENU" ]]; then
+        if [[ -n "${FORCE_SIMPLE_MENU:-}" ]]; then
             simple_menu_selector "$@"
         else
             advanced_menu_selector "$@"
